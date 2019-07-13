@@ -191,7 +191,9 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
     gzerr << "Aliasing on motor [" << motor_number_ << "] might occur. Consider making smaller simulation time steps or raising the rotor_velocity_slowdown_sim_ param.\n";
   }
   double real_motor_velocity = motor_rot_vel_ * rotor_velocity_slowdown_sim_;
+  
   double force = real_motor_velocity * real_motor_velocity * motor_constant_;
+
 
   // scale down force linearly with forward speed
   // XXX this has to be modelled better
@@ -202,8 +204,24 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
   ignition::math::Vector3d body_velocity = ignitionFromGazeboMath(link_->GetWorldLinearVel());
 #endif
   double vel = body_velocity.Length();
-  double scalar = 1 - vel / 25.0; // at 50 m/s the rotor will not produce any force anymore
+  
+  // the scalar here is trying to model the H force experienced by props during 
+  // quad flight.  During fw flight, there is not much H force effect.  
+  // So, we are using here 10m/s to transition between the quad motor
+  // model and the fw motor model while keeping the transition smooth
+  // so that it does not trigger estimation error in the EKF by increasing
+  // the innovation.   
+  double scalar;
+  if (vel < 10)
+  {
+    scalar = 1 - vel / 25.0; // at 50 m/s the rotor will not produce any force anymore
+  } else
+  {
+    scalar = 1 - 10.0 / 25.0;
+  }
+
   scalar = ignition::math::clamp(scalar, 0.0, 1.0);
+
   // Apply a force to the link.
   link_->AddRelativeForce(ignition::math::Vector3d(0, 0, force * scalar));
 
@@ -221,6 +239,7 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
   ignition::math::Vector3d air_drag = -std::abs(real_motor_velocity) * rotor_drag_coefficient_ * body_velocity_perpendicular;
   // Apply air_drag to link.
   link_->AddForce(air_drag);
+
   // Moments
   // Getting the parent link, such that the resulting torques can be applied to it.
   physics::Link_V parent_links = link_->GetParentJointsLinks();
@@ -239,6 +258,7 @@ void GazeboMotorModel::UpdateForcesAndMoments() {
   // - \omega * \mu_1 * V_A^{\perp}
   rolling_moment = -std::abs(real_motor_velocity) * rolling_moment_coefficient_ * body_velocity_perpendicular;
   parent_links.at(0)->AddTorque(rolling_moment);
+
   // Apply the filter on the motor's velocity.
   double ref_motor_rot_vel;
   ref_motor_rot_vel = rotor_velocity_filter_->updateFilter(ref_motor_rot_vel_, sampling_time_);
